@@ -5,6 +5,8 @@ package integration
 import (
 	"context"
 	"errors"
+	"net/url"
+	"slices"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -1017,5 +1019,74 @@ func TestIAM_UpdateRoleNotFound(t *testing.T) {
 
 	if !errors.As(err, &apiErr) || apiErr.ErrorCode() != "NoSuchEntity" {
 		t.Fatalf("expected NoSuchEntity, got: %T: %v", err, err)
+	}
+}
+
+func TestIAM_PutGetListDeleteUserPolicy(t *testing.T) {
+	client := newIAMClient(t)
+	ctx := t.Context()
+	userName := "test-inline-policy-user@example.com"
+	policyName := "IAM_ACCESS_GUARD_DENY_ALL_POLICY"
+	policyDoc := `{"Version":"2012-10-17","Statement":[{"Effect":"Deny","Action":"*","Resource":"*"}]}`
+
+	if _, err := client.CreateUser(ctx, &iam.CreateUserInput{UserName: aws.String(userName)}); err != nil {
+		t.Fatalf("failed to create user: %v", err)
+	}
+
+	t.Cleanup(func() {
+		_, _ = client.DeleteUserPolicy(context.Background(), &iam.DeleteUserPolicyInput{
+			UserName:   aws.String(userName),
+			PolicyName: aws.String(policyName),
+		})
+		_, _ = client.DeleteUser(context.Background(), &iam.DeleteUserInput{UserName: aws.String(userName)})
+	})
+
+	if _, err := client.PutUserPolicy(ctx, &iam.PutUserPolicyInput{
+		UserName:       aws.String(userName),
+		PolicyName:     aws.String(policyName),
+		PolicyDocument: aws.String(policyDoc),
+	}); err != nil {
+		t.Fatalf("failed to put user policy: %v", err)
+	}
+
+	listResult, err := client.ListUserPolicies(ctx, &iam.ListUserPoliciesInput{UserName: aws.String(userName)})
+	if err != nil {
+		t.Fatalf("failed to list user policies: %v", err)
+	}
+
+	if !slices.Equal(listResult.PolicyNames, []string{policyName}) || listResult.IsTruncated {
+		t.Errorf("PolicyNames = %v (truncated %v), want [%s]", listResult.PolicyNames, listResult.IsTruncated, policyName)
+	}
+
+	getResult, err := client.GetUserPolicy(ctx, &iam.GetUserPolicyInput{
+		UserName:   aws.String(userName),
+		PolicyName: aws.String(policyName),
+	})
+	if err != nil {
+		t.Fatalf("failed to get user policy: %v", err)
+	}
+
+	if doc, err := url.QueryUnescape(aws.ToString(getResult.PolicyDocument)); err != nil || doc != policyDoc {
+		t.Errorf("decoded PolicyDocument = %q (%v), want %q", doc, err, policyDoc)
+	}
+
+	var conflict *types.DeleteConflictException
+	if _, err := client.DeleteUser(ctx, &iam.DeleteUserInput{UserName: aws.String(userName)}); !errors.As(err, &conflict) {
+		t.Errorf("DeleteUser with an inline policy: err = %v, want DeleteConflict", err)
+	}
+
+	if _, err := client.DeleteUserPolicy(ctx, &iam.DeleteUserPolicyInput{
+		UserName:   aws.String(userName),
+		PolicyName: aws.String(policyName),
+	}); err != nil {
+		t.Fatalf("failed to delete user policy: %v", err)
+	}
+
+	var noSuchEntity *types.NoSuchEntityException
+	if _, err := client.GetUserPolicy(ctx, &iam.GetUserPolicyInput{
+		UserName:   aws.String(userName),
+		PolicyName: aws.String(policyName),
+	}); !errors.As(err, &noSuchEntity) {
+		t.Errorf("GetUserPolicy after delete: err = %v, want NoSuchEntity", err)
 	}
 }

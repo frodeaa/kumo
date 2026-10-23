@@ -7,14 +7,15 @@ import (
 
 // User represents an IAM user.
 type User struct {
-	UserName         string           `xml:"UserName"`
-	UserID           string           `xml:"UserId"`
-	Arn              string           `xml:"Arn"`
-	Path             string           `xml:"Path"`
-	CreateDate       time.Time        `xml:"CreateDate"`
-	PasswordLastUsed *time.Time       `xml:"PasswordLastUsed,omitempty"`
-	Tags             []Tag            `xml:"Tags>member,omitempty"`
-	AttachedPolicies []AttachedPolicy `xml:"-"`
+	UserName         string            `xml:"UserName"`
+	UserID           string            `xml:"UserId"`
+	Arn              string            `xml:"Arn"`
+	Path             string            `xml:"Path"`
+	CreateDate       time.Time         `xml:"CreateDate"`
+	PasswordLastUsed *time.Time        `xml:"PasswordLastUsed,omitempty"`
+	Tags             []Tag             `xml:"Tags>member,omitempty"`
+	AttachedPolicies []AttachedPolicy  `xml:"-"`
+	InlinePolicies   map[string]string `xml:"-"`
 }
 
 // Role represents an IAM role.
@@ -614,4 +615,40 @@ type Error struct {
 // Error implements the error interface.
 func (e *Error) Error() string {
 	return e.Code + ": " + e.Message
+}
+
+// PutUserPolicyResponse represents a PutUserPolicy response.
+type PutUserPolicyResponse struct {
+	ResponseMetadata ResponseMetadata `xml:"ResponseMetadata"`
+}
+
+// GetUserPolicyResponse represents a GetUserPolicy response.
+type GetUserPolicyResponse struct {
+	GetUserPolicyResult GetUserPolicyResult `xml:"GetUserPolicyResult"`
+	ResponseMetadata    ResponseMetadata    `xml:"ResponseMetadata"`
+}
+
+// GetUserPolicyResult contains the result of GetUserPolicy.
+type GetUserPolicyResult struct {
+	UserName       string `xml:"UserName"`
+	PolicyName     string `xml:"PolicyName"`
+	PolicyDocument string `xml:"PolicyDocument"`
+}
+
+// DeleteUserPolicyResponse represents a DeleteUserPolicy response.
+type DeleteUserPolicyResponse struct {
+	ResponseMetadata ResponseMetadata `xml:"ResponseMetadata"`
+}
+
+// ListUserPoliciesResponse represents a ListUserPolicies response.
+type ListUserPoliciesResponse struct {
+	ListUserPoliciesResult ListUserPoliciesResult `xml:"ListUserPoliciesResult"`
+	ResponseMetadata       ResponseMetadata       `xml:"ResponseMetadata"`
+}
+
+// ListUserPoliciesResult contains the result of ListUserPolicies.
+type ListUserPoliciesResult struct {
+	PolicyNames []string `xml:"PolicyNames>member"`
+	IsTruncated bool     `xml:"IsTruncated"`
+	Marker      string   `xml:"Marker,omitempty"`
 }

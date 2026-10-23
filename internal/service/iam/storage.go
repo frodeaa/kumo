@@ -61,6 +61,11 @@ type Storage interface {
 	DeleteRolePolicy(ctx context.Context, roleName, policyName string) error
 	ListRolePolicies(ctx context.Context, roleName string) ([]string, error)
 
+	PutUserPolicy(ctx context.Context, userName, policyName, policyDocument string) error
+	GetUserPolicy(ctx context.Context, userName, policyName string) (string, error)
+	DeleteUserPolicy(ctx context.Context, userName, policyName string) error
+	ListUserPolicies(ctx context.Context, userName string) ([]string, error)
+
 	CreateOIDCProvider(ctx context.Context, url string, clientIDs, thumbprints []string) (*OIDCProvider, error)
 	GetOIDCProvider(ctx context.Context, arn string) (*OIDCProvider, error)
 	DeleteOIDCProvider(ctx context.Context, arn string) error
@@ -260,6 +265,13 @@ func (s *MemoryStorage) DeleteUser(_ context.Context, userName string) error {
 		return &Error{
 			Code:    errDeleteConflict,
 			Message: "Cannot delete entity, must detach all policies first.",
+		}
+	}
+
+	if len(user.InlinePolicies) > 0 {
+		return &Error{
+			Code:    errDeleteConflict,
+			Message: "Cannot delete entity, must delete policies first.",
 		}
 	}
 
@@ -1028,6 +1040,100 @@ func (s *MemoryStorage) ListRolePolicies(_ context.Context, roleName string) ([]
 	sort.Strings(names)
 
 	return names, nil
+}
+
+// PutUserPolicy upserts an inline policy on a user.
+func (s *MemoryStorage) PutUserPolicy(_ context.Context, userName, policyName, policyDocument string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	user, ok := s.Users[userName]
+	if !ok {
+		return noSuchUser(userName)
+	}
+
+	if user.InlinePolicies == nil {
+		user.InlinePolicies = make(map[string]string)
+	}
+
+	user.InlinePolicies[policyName] = policyDocument
+
+	s.saveLocked()
+
+	return nil
+}
+
+// GetUserPolicy returns the document for an inline policy on a user.
+func (s *MemoryStorage) GetUserPolicy(_ context.Context, userName, policyName string) (string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	user, ok := s.Users[userName]
+	if !ok {
+		return "", noSuchUser(userName)
+	}
+
+	doc, ok := user.InlinePolicies[policyName]
+	if !ok {
+		return "", noSuchUserPolicy(policyName)
+	}
+
+	return doc, nil
+}
+
+// DeleteUserPolicy removes an inline policy from a user.
+func (s *MemoryStorage) DeleteUserPolicy(_ context.Context, userName, policyName string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	user, ok := s.Users[userName]
+	if !ok {
+		return noSuchUser(userName)
+	}
+
+	if _, ok := user.InlinePolicies[policyName]; !ok {
+		return noSuchUserPolicy(policyName)
+	}
+
+	delete(user.InlinePolicies, policyName)
+
+	s.saveLocked()
+
+	return nil
+}
+
+// ListUserPolicies returns the sorted names of a user's inline policies.
+func (s *MemoryStorage) ListUserPolicies(_ context.Context, userName string) ([]string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	user, ok := s.Users[userName]
+	if !ok {
+		return nil, noSuchUser(userName)
+	}
+
+	names := make([]string, 0, len(user.InlinePolicies))
+	for name := range user.InlinePolicies {
+		names = append(names, name)
+	}
+
+	sort.Strings(names)
+
+	return names, nil
+}
+
+func noSuchUser(userName string) error {
+	return &Error{
+		Code:    errNoSuchEntity,
+		Message: fmt.Sprintf("The user with name %s cannot be found.", userName),
+	}
+}
+
+func noSuchUserPolicy(policyName string) error {
+	return &Error{
+		Code:    errNoSuchEntity,
+		Message: fmt.Sprintf("The user policy with name %s cannot be found.", policyName),
+	}
 }
 
 // ListAttachedRolePolicies returns managed policies attached to a role.

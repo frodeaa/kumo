@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -19,6 +21,7 @@ const (
 	errInvalidParameter = "InvalidParameterValue"
 	errInternalError    = "InternalError"
 	errInvalidAction    = "InvalidAction"
+	errMalformedPolicy  = "MalformedPolicyDocument"
 )
 
 // CreateUser handles the CreateUser action.
@@ -831,6 +834,139 @@ func (s *Service) ListRolePolicies(w http.ResponseWriter, r *http.Request) {
 		ListRolePoliciesResult: ListRolePoliciesResult{PolicyNames: names, IsTruncated: false},
 		ResponseMetadata:       ResponseMetadata{RequestID: uuid.New().String()},
 	})
+}
+
+// PutUserPolicy handles the PutUserPolicy action.
+func (s *Service) PutUserPolicy(w http.ResponseWriter, r *http.Request) {
+	userName := getFormValue(r, "UserName")
+	policyName := getFormValue(r, "PolicyName")
+	policyDoc := getFormValue(r, "PolicyDocument")
+
+	switch {
+	case userName == "":
+		writeIAMError(w, errInvalidParameter, "UserName is required", http.StatusBadRequest)
+
+		return
+	case policyName == "":
+		writeIAMError(w, errInvalidParameter, "PolicyName is required", http.StatusBadRequest)
+
+		return
+	case policyDoc == "":
+		writeIAMError(w, errInvalidParameter, "PolicyDocument is required", http.StatusBadRequest)
+
+		return
+	case !json.Valid([]byte(policyDoc)):
+		writeIAMError(w, errMalformedPolicy, "Syntax errors in policy.", http.StatusBadRequest)
+
+		return
+	}
+
+	if err := s.storage.PutUserPolicy(r.Context(), userName, policyName, policyDoc); err != nil {
+		handleIAMError(w, err)
+
+		return
+	}
+
+	writeIAMXMLResponse(w, PutUserPolicyResponse{
+		ResponseMetadata: ResponseMetadata{RequestID: uuid.New().String()},
+	})
+}
+
+// GetUserPolicy handles the GetUserPolicy action. The document is returned
+// URL-encoded, as AWS does.
+func (s *Service) GetUserPolicy(w http.ResponseWriter, r *http.Request) {
+	userName := getFormValue(r, "UserName")
+	policyName := getFormValue(r, "PolicyName")
+
+	if userName == "" || policyName == "" {
+		writeIAMError(w, errInvalidParameter, "UserName and PolicyName are required", http.StatusBadRequest)
+
+		return
+	}
+
+	doc, err := s.storage.GetUserPolicy(r.Context(), userName, policyName)
+	if err != nil {
+		handleIAMError(w, err)
+
+		return
+	}
+
+	writeIAMXMLResponse(w, GetUserPolicyResponse{
+		GetUserPolicyResult: GetUserPolicyResult{
+			UserName:       userName,
+			PolicyName:     policyName,
+			PolicyDocument: strings.ReplaceAll(url.QueryEscape(doc), "+", "%20"),
+		},
+		ResponseMetadata: ResponseMetadata{RequestID: uuid.New().String()},
+	})
+}
+
+// DeleteUserPolicy handles the DeleteUserPolicy action.
+func (s *Service) DeleteUserPolicy(w http.ResponseWriter, r *http.Request) {
+	userName := getFormValue(r, "UserName")
+	policyName := getFormValue(r, "PolicyName")
+
+	if userName == "" || policyName == "" {
+		writeIAMError(w, errInvalidParameter, "UserName and PolicyName are required", http.StatusBadRequest)
+
+		return
+	}
+
+	if err := s.storage.DeleteUserPolicy(r.Context(), userName, policyName); err != nil {
+		handleIAMError(w, err)
+
+		return
+	}
+
+	writeIAMXMLResponse(w, DeleteUserPolicyResponse{
+		ResponseMetadata: ResponseMetadata{RequestID: uuid.New().String()},
+	})
+}
+
+// ListUserPolicies handles the ListUserPolicies action, paging with Marker
+// and MaxItems.
+func (s *Service) ListUserPolicies(w http.ResponseWriter, r *http.Request) {
+	userName := getFormValue(r, "UserName")
+	if userName == "" {
+		writeIAMError(w, errInvalidParameter, "UserName is required", http.StatusBadRequest)
+
+		return
+	}
+
+	names, err := s.storage.ListUserPolicies(r.Context(), userName)
+	if err != nil {
+		handleIAMError(w, err)
+
+		return
+	}
+
+	page, nextMarker := pageSortedNames(names, getFormValue(r, "Marker"), parseMaxItems(r))
+
+	writeIAMXMLResponse(w, ListUserPoliciesResponse{
+		ListUserPoliciesResult: ListUserPoliciesResult{
+			PolicyNames: page,
+			IsTruncated: nextMarker != "",
+			Marker:      nextMarker,
+		},
+		ResponseMetadata: ResponseMetadata{RequestID: uuid.New().String()},
+	})
+}
+
+// pageSortedNames returns up to maxItems (default 100) of the sorted names,
+// starting at marker, and the marker of the next page, or "" on the last.
+func pageSortedNames(names []string, marker string, maxItems int) ([]string, string) {
+	if maxItems <= 0 {
+		maxItems = defaultMaxItems
+	}
+
+	start := sort.SearchStrings(names, marker)
+	end := min(start+maxItems, len(names))
+
+	if end < len(names) {
+		return names[start:end], names[end]
+	}
+
+	return names[start:end], ""
 }
 
 // ListAttachedRolePolicies handles the ListAttachedRolePolicies action.

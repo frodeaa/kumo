@@ -79,6 +79,11 @@ func (s *Service) initActionHandlers() {
 		"ListRolePolicies":            s.ListRolePolicies,
 		"ListAttachedRolePolicies":    s.ListAttachedRolePolicies,
 		"ListInstanceProfilesForRole": s.ListInstanceProfilesForRole,
+		// Inline user policies
+		"PutUserPolicy":    s.PutUserPolicy,
+		"GetUserPolicy":    s.GetUserPolicy,
+		"DeleteUserPolicy": s.DeleteUserPolicy,
+		"ListUserPolicies": s.ListUserPolicies,
 		// OpenID Connect provider
 		"CreateOpenIDConnectProvider":           s.CreateOpenIDConnectProvider,
 		"GetOpenIDConnectProvider":              s.GetOpenIDConnectProvider,

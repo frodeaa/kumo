@@ -35,6 +35,7 @@ func newIAMCmd() *cobra.Command {
 		newIAMDeleteRoleCmd(),
 		newIAMDeleteRolePolicyCmd(),
 		newIAMDeleteUserCmd(),
+		newIAMDeleteUserPolicyCmd(),
 		newIAMDetachRolePolicyCmd(),
 		newIAMDetachUserPolicyCmd(),
 		newIAMGetInstanceProfileCmd(),
@@ -43,6 +44,7 @@ func newIAMCmd() *cobra.Command {
 		newIAMGetRoleCmd(),
 		newIAMGetRolePolicyCmd(),
 		newIAMGetUserCmd(),
+		newIAMGetUserPolicyCmd(),
 		newIAMListAccessKeysCmd(),
 		newIAMListAttachedRolePoliciesCmd(),
 		newIAMListInstanceProfilesCmd(),
@@ -51,8 +53,10 @@ func newIAMCmd() *cobra.Command {
 		newIAMListPoliciesCmd(),
 		newIAMListRolePoliciesCmd(),
 		newIAMListRolesCmd(),
+		newIAMListUserPoliciesCmd(),
 		newIAMListUsersCmd(),
 		newIAMPutRolePolicyCmd(),
+		newIAMPutUserPolicyCmd(),
 		newIAMRemoveRoleFromInstanceProfileCmd(),
 		newIAMTagRoleCmd(),
 		newIAMUpdateAssumeRolePolicyCmd(),
@@ -876,6 +880,51 @@ func newIAMDeleteUserCmd() *cobra.Command {
 	return cmd
 }
 
+func newIAMDeleteUserPolicyCmd() *cobra.Command {
+	var policyName string
+	var userName string
+
+	cmd := &cobra.Command{
+		Use:   "delete-user-policy",
+		Short: "DeleteUserPolicy",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			cfg, err := newAWSConfig(cmd.Context())
+			if err != nil {
+				return err
+			}
+
+			client := iam.NewFromConfig(cfg, func(o *iam.Options) {
+				o.BaseEndpoint = aws.String(endpointURL)
+			})
+
+			input := &iam.DeleteUserPolicyInput{}
+
+			if policyName != "" {
+				input.PolicyName = aws.String(policyName)
+			}
+
+			if userName != "" {
+				input.UserName = aws.String(userName)
+			}
+
+			_, err = client.DeleteUserPolicy(cmd.Context(), input)
+			if err != nil {
+				return fmt.Errorf("delete-user-policy failed: %w", err)
+			}
+
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&policyName, "policy-name", "", "Policy name")
+
+	cmd.Flags().StringVar(&userName, "user-name", "", "User name")
+
+	cmd.Flags().String("region", "", "Region override (ignored)")
+
+	return cmd
+}
+
 func newIAMDetachRolePolicyCmd() *cobra.Command {
 	var policyArn string
 	var roleName string
@@ -1217,6 +1266,55 @@ func newIAMGetUserCmd() *cobra.Command {
 			return nil
 		},
 	}
+
+	cmd.Flags().StringVar(&userName, "user-name", "", "User name")
+
+	cmd.Flags().String("region", "", "Region override (ignored)")
+
+	return cmd
+}
+
+func newIAMGetUserPolicyCmd() *cobra.Command {
+	var policyName string
+	var userName string
+
+	cmd := &cobra.Command{
+		Use:   "get-user-policy",
+		Short: "GetUserPolicy",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			cfg, err := newAWSConfig(cmd.Context())
+			if err != nil {
+				return err
+			}
+
+			client := iam.NewFromConfig(cfg, func(o *iam.Options) {
+				o.BaseEndpoint = aws.String(endpointURL)
+			})
+
+			input := &iam.GetUserPolicyInput{}
+
+			if policyName != "" {
+				input.PolicyName = aws.String(policyName)
+			}
+
+			if userName != "" {
+				input.UserName = aws.String(userName)
+			}
+
+			out, err := client.GetUserPolicy(cmd.Context(), input)
+			if err != nil {
+				return fmt.Errorf("get-user-policy failed: %w", err)
+			}
+
+			if err := writeOutput(out); err != nil {
+				return err
+			}
+
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&policyName, "policy-name", "", "Policy name")
 
 	cmd.Flags().StringVar(&userName, "user-name", "", "User name")
 
@@ -1680,6 +1778,62 @@ func newIAMListRolesCmd() *cobra.Command {
 	return cmd
 }
 
+func newIAMListUserPoliciesCmd() *cobra.Command {
+	var userName string
+	var marker string
+	var maxItems int32
+
+	cmd := &cobra.Command{
+		Use:   "list-user-policies",
+		Short: "ListUserPolicies",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			cfg, err := newAWSConfig(cmd.Context())
+			if err != nil {
+				return err
+			}
+
+			client := iam.NewFromConfig(cfg, func(o *iam.Options) {
+				o.BaseEndpoint = aws.String(endpointURL)
+			})
+
+			input := &iam.ListUserPoliciesInput{}
+
+			if userName != "" {
+				input.UserName = aws.String(userName)
+			}
+
+			if marker != "" {
+				input.Marker = aws.String(marker)
+			}
+
+			if maxItems != 0 {
+				input.MaxItems = aws.Int32(maxItems)
+			}
+
+			out, err := client.ListUserPolicies(cmd.Context(), input)
+			if err != nil {
+				return fmt.Errorf("list-user-policies failed: %w", err)
+			}
+
+			if err := writeOutput(out); err != nil {
+				return err
+			}
+
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&userName, "user-name", "", "User name")
+
+	cmd.Flags().StringVar(&marker, "marker", "", "Marker")
+
+	cmd.Flags().Int32Var(&maxItems, "max-items", 0, "Max items")
+
+	cmd.Flags().String("region", "", "Region override (ignored)")
+
+	return cmd
+}
+
 func newIAMListUsersCmd() *cobra.Command {
 	var marker string
 	var maxItems int32
@@ -1782,6 +1936,58 @@ func newIAMPutRolePolicyCmd() *cobra.Command {
 	cmd.Flags().StringVar(&policyName, "policy-name", "", "Policy name")
 
 	cmd.Flags().StringVar(&roleName, "role-name", "", "Role name")
+
+	cmd.Flags().String("region", "", "Region override (ignored)")
+
+	return cmd
+}
+
+func newIAMPutUserPolicyCmd() *cobra.Command {
+	var policyDocument string
+	var policyName string
+	var userName string
+
+	cmd := &cobra.Command{
+		Use:   "put-user-policy",
+		Short: "PutUserPolicy",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			cfg, err := newAWSConfig(cmd.Context())
+			if err != nil {
+				return err
+			}
+
+			client := iam.NewFromConfig(cfg, func(o *iam.Options) {
+				o.BaseEndpoint = aws.String(endpointURL)
+			})
+
+			input := &iam.PutUserPolicyInput{}
+
+			if policyDocument != "" {
+				input.PolicyDocument = aws.String(policyDocument)
+			}
+
+			if policyName != "" {
+				input.PolicyName = aws.String(policyName)
+			}
+
+			if userName != "" {
+				input.UserName = aws.String(userName)
+			}
+
+			_, err = client.PutUserPolicy(cmd.Context(), input)
+			if err != nil {
+				return fmt.Errorf("put-user-policy failed: %w", err)
+			}
+
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&policyDocument, "policy-document", "", "Policy document")
+
+	cmd.Flags().StringVar(&policyName, "policy-name", "", "Policy name")
+
+	cmd.Flags().StringVar(&userName, "user-name", "", "User name")
 
 	cmd.Flags().String("region", "", "Region override (ignored)")
 
