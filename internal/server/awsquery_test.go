@@ -8,6 +8,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/sivchari/kumo/internal/service"
 )
 
 func TestParseServiceFromUserAgent(t *testing.T) {
@@ -91,6 +93,36 @@ func TestQueryDispatcher_RoutesViaUserAgent(t *testing.T) {
 
 	if rec.Code != http.StatusOK {
 		t.Errorf("expected status 200, got %d", rec.Code)
+	}
+}
+
+func TestQueryDispatcher_MarksRequestAsQueryProtocol(t *testing.T) {
+	t.Parallel()
+
+	d := NewQueryProtocolDispatcher()
+
+	marked := false
+
+	d.RegisterAction("DescribeAlarms", "GraniteServiceVersion20100801", "cloudwatch", func(w http.ResponseWriter, r *http.Request) {
+		marked = service.IsQueryProtocol(r)
+
+		w.WriteHeader(http.StatusOK)
+	})
+
+	body := strings.NewReader("Action=DescribeAlarms&Version=2010-08-01")
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/", body)
+
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("User-Agent", "aws-sdk-go-v2/1.36.3 api/cloudwatch#1.0.0 os/linux")
+
+	d.ServeHTTP(httptest.NewRecorder(), req)
+
+	if !marked {
+		t.Error("expected the handler to see the request marked as Query protocol")
+	}
+
+	if service.IsQueryProtocol(req) {
+		t.Error("expected the caller's request to stay unmarked")
 	}
 }
 

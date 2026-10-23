@@ -3,15 +3,16 @@ package cloudwatch
 import (
 	"encoding/xml"
 	"net/http"
+	"time"
 
 	"github.com/google/uuid"
 )
 
 // CloudWatch's Query protocol (used by terraform-provider-aws and other
 // pre-CBOR clients) wraps responses in <ActionResponse> XML envelopes.
-// The JSON DispatchAction path was originally written for non-existent
-// JSON clients; its handlers now route through these XML wrappers when
-// reached via the unified Query→JSON dispatcher.
+// DispatchAction serves both AWS JSON 1.0 clients and Query clients reached
+// via the unified Query→JSON dispatcher; handlers use these XML wrappers
+// only when service.IsQueryProtocol reports the latter.
 
 const cloudWatchXMLNS = "http://monitoring.amazonaws.com/doc/2010-08-01/"
 
@@ -140,8 +141,8 @@ func metricAlarmsToXML(alarms []MetricAlarm) []xmlMetricAlarm {
 			ActionsEnabled:                     a.ActionsEnabled,
 			StateValue:                         a.StateValue,
 			StateReason:                        a.StateReason,
-			StateUpdatedTimestamp:              a.StateUpdatedTimestamp,
-			AlarmConfigurationUpdatedTimestamp: a.AlarmConfigurationUpdatedTimestamp,
+			StateUpdatedTimestamp:              a.StateUpdatedTimestamp.Format(time.RFC3339),
+			AlarmConfigurationUpdatedTimestamp: a.AlarmConfigurationUpdatedTimestamp.Format(time.RFC3339),
 		})
 	}
 

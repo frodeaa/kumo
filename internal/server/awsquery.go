@@ -11,6 +11,8 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+
+	"github.com/sivchari/kumo/internal/service"
 )
 
 // QueryServiceHandler handles Query protocol requests for a specific service.
@@ -88,7 +90,7 @@ func (d *QueryProtocolDispatcher) ServeHTTP(w http.ResponseWriter, r *http.Reque
 	r.ContentLength = int64(len(jsonBody))
 	r.Header.Set("Content-Type", "application/x-amz-json-1.0")
 	r.Header.Set("X-Amz-Target", entry.servicePrefix+"."+action)
-	entry.handler(w, r)
+	entry.handler(w, service.WithQueryProtocol(r))
 }
 
 // queryResolveError represents an error during handler resolution.

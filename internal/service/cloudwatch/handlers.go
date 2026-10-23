@@ -164,6 +164,12 @@ func (s *Service) PutMetricAlarm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !service.IsQueryProtocol(r) {
+		writeJSONResponse(w, struct{}{})
+
+		return
+	}
+
 	// PutMetricAlarm returns an empty response on success — XML for the
 	// Query-protocol path that terraform-provider-aws uses.
 	writeCloudWatchXML(w, xmlPutMetricAlarmResponse{
@@ -189,6 +195,12 @@ func (s *Service) DeleteAlarms(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !service.IsQueryProtocol(r) {
+		writeJSONResponse(w, struct{}{})
+
+		return
+	}
+
 	// DeleteAlarms returns an empty response on success — XML for the
 	// Query-protocol path that terraform-provider-aws uses.
 	writeCloudWatchXML(w, xmlDeleteAlarmsResponse{
@@ -207,6 +219,15 @@ func (s *Service) DescribeAlarms(w http.ResponseWriter, r *http.Request) {
 	result, err := s.storage.DescribeAlarms(r.Context(), &req)
 	if err != nil {
 		handleCloudWatchError(w, err)
+
+		return
+	}
+
+	if !service.IsQueryProtocol(r) {
+		writeJSONResponse(w, DescribeAlarmsResponse{
+			MetricAlarms: result.MetricAlarms,
+			NextToken:    result.NextToken,
+		})
 
 		return
 	}
@@ -260,6 +281,12 @@ func (s *Service) ListTagsForResource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !service.IsQueryProtocol(r) {
+		writeJSONResponse(w, ListTagsForResourceResponse{Tags: tags})
+
+		return
+	}
+
 	members := make([]xmlTagMember, 0, len(tags))
 	for _, tag := range tags {
 		members = append(members, xmlTagMember(tag))
@@ -291,6 +318,12 @@ func (s *Service) TagResource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !service.IsQueryProtocol(r) {
+		writeJSONResponse(w, struct{}{})
+
+		return
+	}
+
 	writeCloudWatchXML(w, xmlTagResourceResponse{
 		Xmlns:            cloudWatchXMLNS,
 		ResponseMetadata: xmlResponseMetadata{RequestID: uuid.New().String()},
@@ -310,6 +343,12 @@ func (s *Service) UntagResource(w http.ResponseWriter, r *http.Request) {
 
 	if err := s.storage.UntagResource(r.Context(), req.ResourceARN, req.TagKeys); err != nil {
 		handleCloudWatchError(w, err)
+
+		return
+	}
+
+	if !service.IsQueryProtocol(r) {
+		writeJSONResponse(w, struct{}{})
 
 		return
 	}
@@ -444,8 +483,8 @@ func (s *Service) GetMetricDataCBOR(w http.ResponseWriter, r *http.Request) {
 
 	storageReq := &GetMetricDataRequest{
 		MetricDataQueries: req.MetricDataQueries,
-		StartTime:         jsonTimestamp(req.StartTime.Format(time.RFC3339)),
-		EndTime:           jsonTimestamp(req.EndTime.Format(time.RFC3339)),
+		StartTime:         jsonTimestamp{req.StartTime},
+		EndTime:           jsonTimestamp{req.EndTime},
 		NextToken:         req.NextToken,
 		MaxDatapoints:     req.MaxDatapoints,
 	}
@@ -464,8 +503,7 @@ func (s *Service) GetMetricDataCBOR(w http.ResponseWriter, r *http.Request) {
 		timestamps := make([]time.Time, len(r.Timestamps))
 
 		for j := range r.Timestamps {
-			t, _ := parseTimestamp(string(r.Timestamps[j]))
-			timestamps[j] = t
+			timestamps[j] = r.Timestamps[j].Time
 		}
 
 		cborResults[i] = MetricDataCBORResult{
@@ -502,8 +540,8 @@ func (s *Service) GetMetricStatisticsCBOR(w http.ResponseWriter, r *http.Request
 		Namespace:  req.Namespace,
 		MetricName: req.MetricName,
 		Dimensions: req.Dimensions,
-		StartTime:  jsonTimestamp(req.StartTime.Format(time.RFC3339)),
-		EndTime:    jsonTimestamp(req.EndTime.Format(time.RFC3339)),
+		StartTime:  jsonTimestamp{req.StartTime},
+		EndTime:    jsonTimestamp{req.EndTime},
 		Period:     req.Period,
 		Statistics: req.Statistics,
 		Unit:       req.Unit,
@@ -520,9 +558,8 @@ func (s *Service) GetMetricStatisticsCBOR(w http.ResponseWriter, r *http.Request
 
 	for i := range result.Datapoints {
 		dp := result.Datapoints[i]
-		t, _ := parseTimestamp(string(dp.Timestamp))
 		cborDatapoints[i] = CBORDatapoint{
-			Timestamp:   t,
+			Timestamp:   dp.Timestamp.Time,
 			SampleCount: dp.SampleCount,
 			Average:     dp.Average,
 			Sum:         dp.Sum,
@@ -629,8 +666,6 @@ func (s *Service) DescribeAlarmsCBOR(w http.ResponseWriter, r *http.Request) {
 
 	for i := range result.MetricAlarms {
 		alarm := &result.MetricAlarms[i]
-		stateUpdated, _ := parseTimestamp(alarm.StateUpdatedTimestamp)
-		configUpdated, _ := parseTimestamp(alarm.AlarmConfigurationUpdatedTimestamp)
 		cborAlarms[i] = MetricAlarmCBOR{
 			AlarmName:                          alarm.AlarmName,
 			AlarmArn:                           alarm.AlarmArn,
@@ -648,8 +683,8 @@ func (s *Service) DescribeAlarmsCBOR(w http.ResponseWriter, r *http.Request) {
 			OKActions:                          alarm.OKActions,
 			StateValue:                         alarm.StateValue,
 			StateReason:                        alarm.StateReason,
-			StateUpdatedTimestamp:              stateUpdated,
-			AlarmConfigurationUpdatedTimestamp: configUpdated,
+			StateUpdatedTimestamp:              alarm.StateUpdatedTimestamp.Time,
+			AlarmConfigurationUpdatedTimestamp: alarm.AlarmConfigurationUpdatedTimestamp.Time,
 		}
 	}
 
