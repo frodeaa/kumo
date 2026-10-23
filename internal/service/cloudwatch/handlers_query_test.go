@@ -4,9 +4,11 @@ import (
 	"encoding/xml"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
+	"github.com/sivchari/kumo/internal/server"
 	"github.com/sivchari/kumo/internal/service"
 )
 
@@ -23,6 +25,26 @@ func postQuery(t *testing.T, svc *Service, action, body string) *httptest.Respon
 	if !strings.HasPrefix(rec.Header().Get("Content-Type"), "text/xml") {
 		t.Fatalf("%s: Content-Type = %q, want text/xml; body=%s", action, rec.Header().Get("Content-Type"), rec.Body.String())
 	}
+
+	return rec
+}
+
+// postQueryForm sends form through the Query protocol dispatcher, as the AWS
+// CLI and older SDKs do.
+func postQueryForm(t *testing.T, svc *Service, form url.Values) *httptest.ResponseRecorder {
+	t.Helper()
+
+	dispatcher := server.NewQueryProtocolDispatcher()
+	for _, action := range svc.Actions() {
+		dispatcher.RegisterAction(action, svc.TargetPrefix(), svc.ServiceIdentifier(), svc.DispatchAction)
+	}
+
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("User-Agent", "aws-cli/2.27.25 api/cloudwatch#2010-08-01")
+
+	rec := httptest.NewRecorder()
+	dispatcher.ServeHTTP(rec, req)
 
 	return rec
 }
@@ -88,6 +110,69 @@ func TestQueryProtocol_GetMetricDataReturnsXMLWithISOTimestamps(t *testing.T) {
 	got := resp.Results[0]
 	if got.ID != "q1" || len(got.Timestamps) != 1 || got.Timestamps[0] != "2025-10-16T10:00:00.5Z" || got.Values[0] != 2 {
 		t.Errorf("result = %+v, want q1 with one datapoint at 2025-10-16T10:00:00.5Z valued 2", got)
+	}
+}
+
+func TestQueryProtocol_GetMetricDataFromFormBody(t *testing.T) {
+	svc := New(NewMemoryStorage(""))
+
+	code, body := postJSON(t, svc, actionPutMetricData, `{
+		"Namespace": "Kumo/Test",
+		"MetricData": [{
+			"MetricName": "Latency",
+			"Dimensions": [{"Name": "Account", "Value": "acct-a"}],
+			"Timestamp": "2025-10-16T10:00:00Z",
+			"Value": 7
+		}]
+	}`)
+	if code != http.StatusOK {
+		t.Fatalf("PutMetricData: code=%d body=%s", code, body)
+	}
+
+	rec := postQueryForm(t, svc, url.Values{
+		"Action":                        {actionGetMetricData},
+		"Version":                       {"2010-08-01"},
+		"StartTime":                     {"2025-10-16T09:59:00Z"},
+		"EndTime":                       {"2025-10-16T10:05:00Z"},
+		"MetricDataQueries.member.1.Id": {"m"},
+		"MetricDataQueries.member.1.MetricStat.Metric.Namespace":                 {"Kumo/Test"},
+		"MetricDataQueries.member.1.MetricStat.Metric.MetricName":                {"Latency"},
+		"MetricDataQueries.member.1.MetricStat.Metric.Dimensions.member.1.Name":  {"Account"},
+		"MetricDataQueries.member.1.MetricStat.Metric.Dimensions.member.1.Value": {"acct-a"},
+		"MetricDataQueries.member.1.MetricStat.Period":                           {"60"},
+		"MetricDataQueries.member.1.MetricStat.Stat":                             {"Sum"},
+		"MetricDataQueries.member.2.Id":                                          {"empty"},
+		"MetricDataQueries.member.2.MetricStat.Metric.Namespace":                 {"Kumo/Test"},
+		"MetricDataQueries.member.2.MetricStat.Metric.MetricName":                {"Unknown"},
+		"MetricDataQueries.member.2.MetricStat.Period":                           {"60"},
+		"MetricDataQueries.member.2.MetricStat.Stat":                             {"Sum"},
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GetMetricData: code=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var resp struct {
+		Results []struct {
+			ID         string    `xml:"Id"`
+			StatusCode string    `xml:"StatusCode"`
+			Values     []float64 `xml:"Values>member"`
+		} `xml:"GetMetricDataResult>MetricDataResults>member"`
+	}
+
+	if err := xml.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v body=%s", err, rec.Body.String())
+	}
+
+	if len(resp.Results) != 2 {
+		t.Fatalf("expected one result per query, body=%s", rec.Body.String())
+	}
+
+	if got := resp.Results[0]; got.ID != "m" || len(got.Values) != 1 || got.Values[0] != 7 {
+		t.Errorf("first result = %+v, want m with the stored value 7", got)
+	}
+
+	if got := resp.Results[1]; got.ID != "empty" || got.StatusCode != "Complete" || len(got.Values) != 0 {
+		t.Errorf("second result = %+v, want a complete result with no values", got)
 	}
 }
 
