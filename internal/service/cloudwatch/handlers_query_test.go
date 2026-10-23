@@ -130,22 +130,22 @@ func TestQueryProtocol_GetMetricDataFromFormBody(t *testing.T) {
 	}
 
 	rec := postQueryForm(t, svc, url.Values{
-		"Action":                        {actionGetMetricData},
-		"Version":                       {"2010-08-01"},
+		testFormAction:                  {actionGetMetricData},
+		testFormVersion:                 {testQueryVersion},
 		"StartTime":                     {"2025-10-16T09:59:00Z"},
 		"EndTime":                       {"2025-10-16T10:05:00Z"},
 		"MetricDataQueries.member.1.Id": {"m"},
 		"MetricDataQueries.member.1.MetricStat.Metric.Namespace":                 {"Kumo/Test"},
-		"MetricDataQueries.member.1.MetricStat.Metric.MetricName":                {"Latency"},
-		"MetricDataQueries.member.1.MetricStat.Metric.Dimensions.member.1.Name":  {"Account"},
+		"MetricDataQueries.member.1.MetricStat.Metric.MetricName":                {testMetricLatency},
+		"MetricDataQueries.member.1.MetricStat.Metric.Dimensions.member.1.Name":  {testDimensionAccount},
 		"MetricDataQueries.member.1.MetricStat.Metric.Dimensions.member.1.Value": {"acct-a"},
 		"MetricDataQueries.member.1.MetricStat.Period":                           {"60"},
-		"MetricDataQueries.member.1.MetricStat.Stat":                             {"Sum"},
+		"MetricDataQueries.member.1.MetricStat.Stat":                             {testStatSum},
 		"MetricDataQueries.member.2.Id":                                          {"empty"},
 		"MetricDataQueries.member.2.MetricStat.Metric.Namespace":                 {"Kumo/Test"},
 		"MetricDataQueries.member.2.MetricStat.Metric.MetricName":                {"Unknown"},
 		"MetricDataQueries.member.2.MetricStat.Period":                           {"60"},
-		"MetricDataQueries.member.2.MetricStat.Stat":                             {"Sum"},
+		"MetricDataQueries.member.2.MetricStat.Stat":                             {testStatSum},
 	})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GetMetricData: code=%d body=%s", rec.Code, rec.Body.String())

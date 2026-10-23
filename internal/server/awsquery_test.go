@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -387,6 +388,32 @@ var formToJSONTests = []struct {
 			"Attributes": map[string]any{"VisibilityTimeout": "30"},
 		},
 	},
+}
+
+func TestParseFormValue_KeepsTextThatIsNotCanonical(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		in   string
+		want any
+	}{
+		{in: "60", want: int64(60)},
+		{in: "-5", want: int64(-5)},
+		{in: strconv.FormatBool(true), want: true},
+		{in: strconv.FormatBool(false), want: false},
+		{in: "001", want: "001"},
+		{in: "000000000000", want: "000000000000"},
+		{in: "+5", want: "+5"},
+		{in: "1.0", want: "1.0"},
+		{in: "T", want: "T"},
+		{in: "TRUE", want: "TRUE"},
+	}
+
+	for _, tt := range tests {
+		if got := parseFormValue(tt.in); got != tt.want {
+			t.Errorf("parseFormValue(%q) = %#v, want %#v", tt.in, got, tt.want)
+		}
+	}
 }
 
 func TestFormToJSON(t *testing.T) {

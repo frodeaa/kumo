@@ -267,14 +267,17 @@ func assignFormValue(result map[string]any, key string, values []string) {
 }
 
 // parseFormValue converts a form value string to appropriate JSON type.
-// Numeric strings are converted to numbers for proper JSON unmarshaling.
+// Whole numbers and "true"/"false" become JSON numbers and booleans, but only
+// when that reads back as the same text, so "001" or an account ID like
+// "000000000000" stays a string. Handlers reading through
+// service.ReadJSONRequest coerce the remaining mismatches to their field types.
 func parseFormValue(s string) any {
-	if i, err := strconv.ParseInt(s, 10, 64); err == nil {
+	if i, err := strconv.ParseInt(s, 10, 64); err == nil && strconv.FormatInt(i, 10) == s {
 		return i
 	}
 
-	if b, err := strconv.ParseBool(s); err == nil {
-		return b
+	if s == "true" || s == "false" {
+		return s == "true"
 	}
 
 	return s

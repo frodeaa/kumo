@@ -6,11 +6,14 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"reflect"
 )
 
 // ReadJSONRequest reads the HTTP request body and decodes it as JSON into v.
 // An empty body is treated as a no-op (v is left unchanged), matching the
-// behavior shared across the JSON-protocol service handlers.
+// behavior shared across the JSON-protocol service handlers. A request that
+// arrived over the Query protocol has its values coerced to v's field types
+// first, since form values carry no type.
 func ReadJSONRequest(r *http.Request, v any) error {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -19,6 +22,12 @@ func ReadJSONRequest(r *http.Request, v any) error {
 
 	if len(body) == 0 {
 		return nil
+	}
+
+	if IsQueryProtocol(r) {
+		if body, err = coerceQueryJSON(body, reflect.TypeOf(v)); err != nil {
+			return err
+		}
 	}
 
 	if err := json.Unmarshal(body, v); err != nil {
