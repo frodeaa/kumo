@@ -246,7 +246,7 @@ func TestQueryProtocol_ErrorsAreXML(t *testing.T) {
 		},
 		{
 			name:       "unknown action",
-			action:     "DescribeAlarmHistory",
+			action:     "DescribeAnomalyDetectors",
 			body:       `{}`,
 			wantStatus: http.StatusBadRequest,
 			wantCode:   errInvalidAction,

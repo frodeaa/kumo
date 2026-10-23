@@ -256,3 +256,46 @@ func TestCloudWatch_QueryProtocol_MetricsAndAlarmState(t *testing.T) {
 		t.Errorf("SetAlarmState on a missing alarm: status %d code %q, want 404 ResourceNotFound", status, errResp.Code)
 	}
 }
+
+func TestCloudWatch_JSONProtocol_DescribeAlarmHistory(t *testing.T) {
+	alarmName := "json-protocol-history"
+
+	postCloudWatchJSON(t.Context(), t, "PutMetricAlarm", `{
+		"AlarmName": "`+alarmName+`",
+		"MetricName": "ConsoleLoginFailure",
+		"Namespace": "Kumo/JSONProtocol",
+		"Statistic": "Sum",
+		"Period": 60,
+		"EvaluationPeriods": 1,
+		"Threshold": 1,
+		"ComparisonOperator": "GreaterThanOrEqualToThreshold"
+	}`)
+
+	t.Cleanup(func() {
+		postCloudWatchJSON(context.Background(), t, "DeleteAlarms", `{"AlarmNames": ["`+alarmName+`"]}`)
+	})
+
+	postCloudWatchJSON(t.Context(), t, "SetAlarmState", `{"AlarmName": "`+alarmName+`", "StateValue": "ALARM", "StateReason": "test"}`)
+
+	var history struct {
+		AlarmHistoryItems []struct {
+			Timestamp       float64
+			HistoryItemType string
+			HistoryData     string
+		}
+	}
+
+	body := postCloudWatchJSON(t.Context(), t, "DescribeAlarmHistory", `{"AlarmName": "`+alarmName+`", "HistoryItemType": "StateUpdate"}`)
+	if err := json.Unmarshal(body, &history); err != nil {
+		t.Fatalf("DescribeAlarmHistory is not JSON with epoch timestamps: %v body=%s", err, body)
+	}
+
+	if len(history.AlarmHistoryItems) != 1 {
+		t.Fatalf("expected 1 state update, body=%s", body)
+	}
+
+	item := history.AlarmHistoryItems[0]
+	if item.Timestamp <= 0 || !strings.Contains(item.HistoryData, `"newState":{"stateValue":"ALARM"`) {
+		t.Errorf("item = %+v, want a StateUpdate to ALARM with an epoch timestamp", item)
+	}
+}

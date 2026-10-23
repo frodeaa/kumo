@@ -22,6 +22,7 @@ func newCloudWatchCmd() *cobra.Command {
 
 	cmd.AddCommand(
 		newCloudWatchDeleteAlarmsCmd(),
+		newCloudWatchDescribeAlarmHistoryCmd(),
 		newCloudWatchDescribeAlarmsCmd(),
 		newCloudWatchGetMetricDataCmd(),
 		newCloudWatchGetMetricStatisticsCmd(),
@@ -68,6 +69,112 @@ func newCloudWatchDeleteAlarmsCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringArrayVar(&alarmNames, "alarm-names", nil, "Alarm names")
+
+	cmd.Flags().String("region", "", "Region override (ignored)")
+
+	return cmd
+}
+
+func newCloudWatchDescribeAlarmHistoryCmd() *cobra.Command {
+	var alarmContributorId string
+	var alarmName string
+	var alarmTypes []string
+	var endDate string
+	var historyItemType string
+	var maxRecords int32
+	var nextToken string
+	var scanBy string
+	var startDate string
+
+	cmd := &cobra.Command{
+		Use:   "describe-alarm-history",
+		Short: "DescribeAlarmHistory",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			cfg, err := newAWSConfig(cmd.Context())
+			if err != nil {
+				return err
+			}
+
+			client := cloudwatch.NewFromConfig(cfg, func(o *cloudwatch.Options) {
+				o.BaseEndpoint = aws.String(endpointURL)
+			})
+
+			input := &cloudwatch.DescribeAlarmHistoryInput{}
+
+			if alarmContributorId != "" {
+				input.AlarmContributorId = aws.String(alarmContributorId)
+			}
+
+			if alarmName != "" {
+				input.AlarmName = aws.String(alarmName)
+			}
+
+			for _, s := range alarmTypes {
+				input.AlarmTypes = append(input.AlarmTypes, types.AlarmType(s))
+			}
+
+			if endDate != "" {
+				parsed, err := time.Parse(time.RFC3339, endDate)
+				if err != nil {
+					return fmt.Errorf("describe-alarm-history: parse --end-date: %w", err)
+				}
+				input.EndDate = &parsed
+			}
+
+			if historyItemType != "" {
+				input.HistoryItemType = types.HistoryItemType(historyItemType)
+			}
+
+			if maxRecords != 0 {
+				input.MaxRecords = aws.Int32(maxRecords)
+			}
+
+			if nextToken != "" {
+				input.NextToken = aws.String(nextToken)
+			}
+
+			if scanBy != "" {
+				input.ScanBy = types.ScanBy(scanBy)
+			}
+
+			if startDate != "" {
+				parsed, err := time.Parse(time.RFC3339, startDate)
+				if err != nil {
+					return fmt.Errorf("describe-alarm-history: parse --start-date: %w", err)
+				}
+				input.StartDate = &parsed
+			}
+
+			out, err := client.DescribeAlarmHistory(cmd.Context(), input)
+			if err != nil {
+				return fmt.Errorf("describe-alarm-history failed: %w", err)
+			}
+
+			if err := writeOutput(out); err != nil {
+				return err
+			}
+
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&alarmContributorId, "alarm-contributor-id", "", "Alarm contributor id")
+
+	cmd.Flags().StringVar(&alarmName, "alarm-name", "", "Alarm name")
+
+	cmd.Flags().StringArrayVar(&alarmTypes, "alarm-types", nil, "Alarm types")
+
+	cmd.Flags().StringVar(&endDate, "end-date", "", "End date (RFC3339)")
+
+	cmd.Flags().StringVar(&historyItemType, "history-item-type", "", "History item type")
+
+	cmd.Flags().Int32Var(&maxRecords, "max-records", 0, "Max records")
+
+	cmd.Flags().StringVar(&nextToken, "next-token", "", "Next token")
+
+	cmd.Flags().StringVar(&scanBy, "scan-by", "", "Scan by")
+
+	cmd.Flags().StringVar(&startDate, "start-date", "", "Start date (RFC3339)")
 
 	cmd.Flags().String("region", "", "Region override (ignored)")
 

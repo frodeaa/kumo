@@ -83,6 +83,7 @@ func (s *Service) Actions() []string {
 		actionPutMetricAlarm,
 		actionDeleteAlarms,
 		actionDescribeAlarms,
+		actionDescribeAlarmHistory,
 		actionSetAlarmState,
 		actionListTagsForResource,
 		actionTagResource,
@@ -115,6 +116,8 @@ func (s *Service) DispatchCBORAction(w http.ResponseWriter, r *http.Request, ope
 		s.DeleteAlarmsCBOR(w, r)
 	case actionDescribeAlarms:
 		s.DescribeAlarmsCBOR(w, r)
+	case actionDescribeAlarmHistory:
+		s.DescribeAlarmHistoryCBOR(w, r)
 	case actionSetAlarmState:
 		s.SetAlarmStateCBOR(w, r)
 	case actionListTagsForResource:

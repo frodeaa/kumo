@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"slices"
 	"strconv"
 	"time"
 
@@ -458,4 +459,149 @@ type TagResourceRequest struct {
 type UntagResourceRequest struct {
 	ResourceARN string   `json:"ResourceARN"`
 	TagKeys     []string `json:"TagKeys"`
+}
+
+// Alarm history constants.
+const (
+	alarmTypeMetricAlarm           = "MetricAlarm"
+	historyItemConfigurationUpdate = "ConfigurationUpdate"
+	historyItemStateUpdate         = "StateUpdate"
+	scanByTimestampAscending       = "TimestampAscending"
+	maxAlarmHistoryRecords         = 100
+	alarmHistoryDataVersion        = "1.0"
+	alarmHistoryTimestampLayout    = "2006-01-02T15:04:05.000-0700"
+)
+
+// AlarmHistoryItem is one recorded change of an alarm. It is also the CBOR
+// response item, where Timestamp is sent as a CBOR time tag.
+type AlarmHistoryItem struct {
+	AlarmName       string    `cbor:"AlarmName"`
+	AlarmType       string    `cbor:"AlarmType"`
+	Timestamp       time.Time `cbor:"Timestamp"`
+	HistoryItemType string    `cbor:"HistoryItemType"`
+	HistorySummary  string    `cbor:"HistorySummary"`
+	HistoryData     string    `cbor:"HistoryData"`
+}
+
+// DescribeAlarmHistoryRequest is the request for DescribeAlarmHistory.
+type DescribeAlarmHistoryRequest struct {
+	AlarmName       string        `json:"AlarmName,omitempty"`
+	AlarmTypes      []string      `json:"AlarmTypes,omitempty"`
+	HistoryItemType string        `json:"HistoryItemType,omitempty"`
+	StartDate       jsonTimestamp `json:"StartDate,omitzero"`
+	EndDate         jsonTimestamp `json:"EndDate,omitzero"`
+	MaxRecords      *int32        `json:"MaxRecords,omitempty"`
+	NextToken       string        `json:"NextToken,omitempty"`
+	ScanBy          string        `json:"ScanBy,omitempty"`
+}
+
+// DescribeAlarmHistoryCBORRequest is the CBOR request for DescribeAlarmHistory.
+type DescribeAlarmHistoryCBORRequest struct {
+	AlarmName       string    `cbor:"AlarmName,omitempty"`
+	AlarmTypes      []string  `cbor:"AlarmTypes,omitempty"`
+	HistoryItemType string    `cbor:"HistoryItemType,omitempty"`
+	StartDate       time.Time `cbor:"StartDate"`
+	EndDate         time.Time `cbor:"EndDate"`
+	MaxRecords      *int32    `cbor:"MaxRecords,omitempty"`
+	NextToken       string    `cbor:"NextToken,omitempty"`
+	ScanBy          string    `cbor:"ScanBy,omitempty"`
+}
+
+// DescribeAlarmHistoryResult is the storage result for DescribeAlarmHistory.
+type DescribeAlarmHistoryResult struct {
+	AlarmHistoryItems []AlarmHistoryItem
+	NextToken         string
+}
+
+// DescribeAlarmHistoryResponse is the JSON response for DescribeAlarmHistory.
+type DescribeAlarmHistoryResponse struct {
+	AlarmHistoryItems []AlarmHistoryItemJSON `json:"AlarmHistoryItems"`
+	NextToken         string                 `json:"NextToken,omitempty"`
+}
+
+// AlarmHistoryItemJSON is an alarm history item on the JSON wire.
+type AlarmHistoryItemJSON struct {
+	AlarmName       string        `json:"AlarmName"`
+	AlarmType       string        `json:"AlarmType"`
+	Timestamp       jsonTimestamp `json:"Timestamp"`
+	HistoryItemType string        `json:"HistoryItemType"`
+	HistorySummary  string        `json:"HistorySummary"`
+	HistoryData     string        `json:"HistoryData"`
+}
+
+// DescribeAlarmHistoryCBORResponse is the CBOR response for DescribeAlarmHistory.
+type DescribeAlarmHistoryCBORResponse struct {
+	AlarmHistoryItems []AlarmHistoryItem `cbor:"AlarmHistoryItems"`
+	NextToken         string             `cbor:"NextToken,omitempty"`
+}
+
+// alarmConfigurationHistoryData is the HistoryData document of a
+// ConfigurationUpdate item.
+type alarmConfigurationHistoryData struct {
+	Version      string              `json:"version"`
+	Type         string              `json:"type"`
+	CreatedAlarm *alarmHistoryConfig `json:"createdAlarm,omitempty"`
+	UpdatedAlarm *alarmHistoryConfig `json:"updatedAlarm,omitempty"`
+}
+
+// alarmHistoryConfig is an alarm's configuration as AWS writes it in
+// HistoryData, including its lower-case "okactions" key.
+type alarmHistoryConfig struct {
+	AlarmName                          string                  `json:"alarmName"`
+	AlarmArn                           string                  `json:"alarmArn"`
+	AlarmDescription                   string                  `json:"alarmDescription,omitempty"`
+	AlarmConfigurationUpdatedTimestamp string                  `json:"alarmConfigurationUpdatedTimestamp"`
+	Namespace                          string                  `json:"namespace"`
+	MetricName                         string                  `json:"metricName"`
+	Dimensions                         []alarmHistoryDimension `json:"dimensions"`
+	Statistic                          string                  `json:"statistic,omitempty"`
+	Period                             int32                   `json:"period"`
+	EvaluationPeriods                  int32                   `json:"evaluationPeriods"`
+	Threshold                          float64                 `json:"threshold"`
+	ComparisonOperator                 string                  `json:"comparisonOperator"`
+	ActionsEnabled                     bool                    `json:"actionsEnabled"`
+	AlarmActions                       []string                `json:"alarmActions"`
+	OKActions                          []string                `json:"okactions"`
+}
+
+type alarmHistoryDimension struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
+func newAlarmHistoryConfig(alarm *Alarm) alarmHistoryConfig {
+	dimensions := make([]alarmHistoryDimension, 0, len(alarm.Dimensions))
+	for _, d := range alarm.Dimensions {
+		dimensions = append(dimensions, alarmHistoryDimension(d))
+	}
+
+	return alarmHistoryConfig{
+		AlarmName:                          alarm.AlarmName,
+		AlarmArn:                           alarm.AlarmARN,
+		AlarmDescription:                   alarm.AlarmDescription,
+		AlarmConfigurationUpdatedTimestamp: alarm.CreatedAt.Format(alarmHistoryTimestampLayout),
+		Namespace:                          alarm.Namespace,
+		MetricName:                         alarm.MetricName,
+		Dimensions:                         dimensions,
+		Statistic:                          alarm.Statistic,
+		Period:                             alarm.Period,
+		EvaluationPeriods:                  alarm.EvaluationPeriods,
+		Threshold:                          alarm.Threshold,
+		ComparisonOperator:                 alarm.ComparisonOperator,
+		ActionsEnabled:                     alarm.ActionsEnabled,
+		AlarmActions:                       slices.Concat([]string{}, alarm.AlarmActions),
+		OKActions:                          slices.Concat([]string{}, alarm.OKActions),
+	}
+}
+
+// alarmStateHistoryData is the HistoryData document of a StateUpdate item.
+type alarmStateHistoryData struct {
+	Version  string            `json:"version"`
+	OldState alarmHistoryState `json:"oldState"`
+	NewState alarmHistoryState `json:"newState"`
+}
+
+type alarmHistoryState struct {
+	StateValue  string `json:"stateValue"`
+	StateReason string `json:"stateReason"`
 }

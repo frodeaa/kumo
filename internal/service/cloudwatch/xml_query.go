@@ -348,3 +348,46 @@ func metricsToXML(metrics []Metric) []xmlMetric {
 
 	return out
 }
+
+// xmlDescribeAlarmHistoryResponse wraps the DescribeAlarmHistory result.
+type xmlDescribeAlarmHistoryResponse struct {
+	XMLName                    xml.Name                      `xml:"DescribeAlarmHistoryResponse"`
+	Xmlns                      string                        `xml:"xmlns,attr"`
+	DescribeAlarmHistoryResult xmlDescribeAlarmHistoryResult `xml:"DescribeAlarmHistoryResult"`
+	ResponseMetadata           xmlResponseMetadata           `xml:"ResponseMetadata"`
+}
+
+type xmlDescribeAlarmHistoryResult struct {
+	AlarmHistoryItems xmlAlarmHistoryItemList `xml:"AlarmHistoryItems"`
+	NextToken         string                  `xml:"NextToken,omitempty"`
+}
+
+type xmlAlarmHistoryItemList struct {
+	Members []xmlAlarmHistoryItem `xml:"member"`
+}
+
+type xmlAlarmHistoryItem struct {
+	AlarmName       string `xml:"AlarmName"`
+	AlarmType       string `xml:"AlarmType"`
+	Timestamp       string `xml:"Timestamp"`
+	HistoryItemType string `xml:"HistoryItemType"`
+	HistorySummary  string `xml:"HistorySummary"`
+	HistoryData     string `xml:"HistoryData"`
+}
+
+func alarmHistoryItemsToXML(items []AlarmHistoryItem) []xmlAlarmHistoryItem {
+	out := make([]xmlAlarmHistoryItem, 0, len(items))
+
+	for _, item := range items {
+		out = append(out, xmlAlarmHistoryItem{
+			AlarmName:       item.AlarmName,
+			AlarmType:       item.AlarmType,
+			Timestamp:       xmlTimestamp(item.Timestamp),
+			HistoryItemType: item.HistoryItemType,
+			HistorySummary:  item.HistorySummary,
+			HistoryData:     item.HistoryData,
+		})
+	}
+
+	return out
+}

@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -34,6 +36,7 @@ type Storage interface {
 	PutMetricAlarm(ctx context.Context, req *PutMetricAlarmRequest) error
 	DeleteAlarms(ctx context.Context, alarmNames []string) error
 	DescribeAlarms(ctx context.Context, req *DescribeAlarmsRequest) (*DescribeAlarmsResult, error)
+	DescribeAlarmHistory(ctx context.Context, req *DescribeAlarmHistoryRequest) (*DescribeAlarmHistoryResult, error)
 	SetAlarmState(ctx context.Context, alarmName, stateValue, stateReason string) error
 	TagResource(ctx context.Context, resourceARN string, tags []Tag) error
 	UntagResource(ctx context.Context, resourceARN string, tagKeys []string) error
@@ -73,10 +76,11 @@ var (
 
 // MemoryStorage implements Storage with in-memory data.
 type MemoryStorage struct {
-	mu           sync.RWMutex                `json:"-"`
-	Metrics      map[MetricKey]*StoredMetric `json:"metrics"`
-	Alarms       map[string]*Alarm           `json:"alarms"`
-	Tags         map[string][]Tag            `json:"tags"`
+	mu           sync.RWMutex                  `json:"-"`
+	Metrics      map[MetricKey]*StoredMetric   `json:"metrics"`
+	Alarms       map[string]*Alarm             `json:"alarms"`
+	AlarmHistory map[string][]AlarmHistoryItem `json:"alarmHistory"`
+	Tags         map[string][]Tag              `json:"tags"`
 	baseURL      string
 	region       string
 	dataDir      string
@@ -91,11 +95,12 @@ func NewMemoryStorage(baseURL string, opts ...Option) *MemoryStorage {
 	}
 
 	s := &MemoryStorage{
-		Metrics: make(map[MetricKey]*StoredMetric),
-		Alarms:  make(map[string]*Alarm),
-		Tags:    make(map[string][]Tag),
-		baseURL: baseURL,
-		region:  region,
+		Metrics:      make(map[MetricKey]*StoredMetric),
+		Alarms:       make(map[string]*Alarm),
+		AlarmHistory: make(map[string][]AlarmHistoryItem),
+		Tags:         make(map[string][]Tag),
+		baseURL:      baseURL,
+		region:       region,
 	}
 	for _, o := range opts {
 		o(s)
@@ -129,9 +134,10 @@ func stringToMetricKey(s string) MetricKey {
 
 // marshalableStorage is a JSON-serializable representation of MemoryStorage.
 type marshalableStorage struct {
-	Metrics map[string]*StoredMetric `json:"metrics"`
-	Alarms  map[string]*Alarm        `json:"alarms"`
-	Tags    map[string][]Tag         `json:"tags"`
+	Metrics      map[string]*StoredMetric      `json:"metrics"`
+	Alarms       map[string]*Alarm             `json:"alarms"`
+	AlarmHistory map[string][]AlarmHistoryItem `json:"alarmHistory"`
+	Tags         map[string][]Tag              `json:"tags"`
 }
 
 // MarshalJSON serializes the storage state to JSON.
@@ -140,9 +146,10 @@ func (s *MemoryStorage) MarshalJSON() ([]byte, error) {
 	defer s.mu.RUnlock()
 
 	m := &marshalableStorage{
-		Metrics: make(map[string]*StoredMetric, len(s.Metrics)),
-		Alarms:  s.Alarms,
-		Tags:    s.Tags,
+		Metrics:      make(map[string]*StoredMetric, len(s.Metrics)),
+		Alarms:       s.Alarms,
+		AlarmHistory: s.AlarmHistory,
+		Tags:         s.Tags,
 	}
 
 	for k, v := range s.Metrics {
@@ -178,6 +185,12 @@ func (s *MemoryStorage) UnmarshalJSON(data []byte) error {
 
 	if s.Alarms == nil {
 		s.Alarms = make(map[string]*Alarm)
+	}
+
+	s.AlarmHistory = m.AlarmHistory
+
+	if s.AlarmHistory == nil {
+		s.AlarmHistory = make(map[string][]AlarmHistoryItem)
 	}
 
 	s.Tags = m.Tags
@@ -453,7 +466,15 @@ func (s *MemoryStorage) PutMetricAlarm(_ context.Context, req *PutMetricAlarmReq
 		CreatedAt:          now,
 	}
 
+	existing, updated := s.Alarms[req.AlarmName]
+	if updated {
+		alarm.StateValue = existing.StateValue
+		alarm.StateReason = existing.StateReason
+		alarm.StateUpdatedAt = existing.StateUpdatedAt
+	}
+
 	s.Alarms[req.AlarmName] = alarm
+	s.recordConfigurationUpdate(alarm, updated)
 
 	s.saveLocked()
 
@@ -476,6 +497,7 @@ func (s *MemoryStorage) DeleteAlarms(_ context.Context, alarmNames []string) err
 
 	for _, name := range alarmNames {
 		delete(s.Alarms, name)
+		delete(s.AlarmHistory, name)
 	}
 
 	s.saveLocked()
@@ -500,9 +522,14 @@ func (s *MemoryStorage) SetAlarmState(ctx context.Context, alarmName, stateValue
 	}
 
 	previousState := alarm.StateValue
+	previousReason := alarm.StateReason
 	alarm.StateValue = stateValue
 	alarm.StateReason = stateReason
 	alarm.StateUpdatedAt = time.Now().UTC()
+
+	if stateValue != previousState {
+		s.recordStateUpdate(alarm, previousState, previousReason)
+	}
 
 	// Determine which actions to fire based on the new state.
 	var actionARNs []string
@@ -598,6 +625,138 @@ func (s *MemoryStorage) buildAlarmNotification(alarm *Alarm, previousState strin
 			ComparisonOperator: alarm.ComparisonOperator,
 		},
 	}
+}
+
+// DescribeAlarmHistory returns the history of one alarm, or of every alarm
+// when AlarmName is empty, filtered, ordered by ScanBy and paged. An unknown
+// alarm has no history rather than being an error, as in AWS.
+func (s *MemoryStorage) DescribeAlarmHistory(_ context.Context, req *DescribeAlarmHistoryRequest) (*DescribeAlarmHistoryResult, error) {
+	maxRecords := maxAlarmHistoryRecords
+	if req.MaxRecords != nil {
+		maxRecords = int(*req.MaxRecords)
+	}
+
+	if maxRecords < 1 || maxRecords > maxAlarmHistoryRecords {
+		return nil, &Error{Code: errInvalidParameter, Message: "MaxRecords must be between 1 and 100"}
+	}
+
+	offset := 0
+
+	if req.NextToken != "" {
+		n, err := strconv.Atoi(req.NextToken)
+		if err != nil || n < 0 {
+			return nil, &Error{Code: errInvalidNextToken, Message: "The service couldn't process the NextToken"}
+		}
+
+		offset = n
+	}
+
+	s.mu.RLock()
+	items := s.matchingHistoryItems(req)
+	s.mu.RUnlock()
+
+	slices.SortStableFunc(items, func(a, b AlarmHistoryItem) int {
+		return a.Timestamp.Compare(b.Timestamp)
+	})
+
+	if req.ScanBy != scanByTimestampAscending {
+		slices.Reverse(items)
+	}
+
+	if offset >= len(items) {
+		return &DescribeAlarmHistoryResult{AlarmHistoryItems: []AlarmHistoryItem{}}, nil
+	}
+
+	end := min(offset+maxRecords, len(items))
+	result := &DescribeAlarmHistoryResult{AlarmHistoryItems: items[offset:end]}
+
+	if end < len(items) {
+		result.NextToken = strconv.Itoa(end)
+	}
+
+	return result, nil
+}
+
+// matchingHistoryItems returns the history items that pass req's filters, in
+// recording order per alarm. The caller must hold at least a read lock.
+func (s *MemoryStorage) matchingHistoryItems(req *DescribeAlarmHistoryRequest) []AlarmHistoryItem {
+	alarmNames := []string{req.AlarmName}
+	if req.AlarmName == "" {
+		alarmNames = slices.Sorted(maps.Keys(s.AlarmHistory))
+	}
+
+	var items []AlarmHistoryItem
+
+	for _, name := range alarmNames {
+		for _, item := range s.AlarmHistory[name] {
+			if historyItemMatches(&item, req) {
+				items = append(items, item)
+			}
+		}
+	}
+
+	return items
+}
+
+func historyItemMatches(item *AlarmHistoryItem, req *DescribeAlarmHistoryRequest) bool {
+	switch {
+	case len(req.AlarmTypes) > 0 && !slices.Contains(req.AlarmTypes, item.AlarmType):
+		return false
+	case req.HistoryItemType != "" && item.HistoryItemType != req.HistoryItemType:
+		return false
+	case !req.StartDate.IsZero() && item.Timestamp.Before(req.StartDate.Time):
+		return false
+	case !req.EndDate.IsZero() && item.Timestamp.After(req.EndDate.Time):
+		return false
+	default:
+		return true
+	}
+}
+
+// recordConfigurationUpdate appends the history item for an alarm created or
+// updated by PutMetricAlarm. The caller must hold the write lock.
+func (s *MemoryStorage) recordConfigurationUpdate(alarm *Alarm, updated bool) {
+	data := alarmConfigurationHistoryData{Version: alarmHistoryDataVersion, Type: "Create"}
+	summary := fmt.Sprintf("Alarm %q created", alarm.AlarmName)
+	config := newAlarmHistoryConfig(alarm)
+
+	if updated {
+		data.Type = "Update"
+		summary = fmt.Sprintf("Alarm %q updated", alarm.AlarmName)
+		data.UpdatedAlarm = &config
+	} else {
+		data.CreatedAlarm = &config
+	}
+
+	s.appendHistory(alarm, historyItemConfigurationUpdate, summary, data)
+}
+
+// recordStateUpdate appends the history item for an alarm state change. The
+// caller must hold the write lock.
+func (s *MemoryStorage) recordStateUpdate(alarm *Alarm, previousState, previousReason string) {
+	s.appendHistory(alarm, historyItemStateUpdate,
+		fmt.Sprintf("Alarm updated from %s to %s", previousState, alarm.StateValue),
+		alarmStateHistoryData{
+			Version:  alarmHistoryDataVersion,
+			OldState: alarmHistoryState{StateValue: previousState, StateReason: previousReason},
+			NewState: alarmHistoryState{StateValue: alarm.StateValue, StateReason: alarm.StateReason},
+		})
+}
+
+func (s *MemoryStorage) appendHistory(alarm *Alarm, itemType, summary string, data any) {
+	historyData, err := json.Marshal(data)
+	if err != nil {
+		return
+	}
+
+	s.AlarmHistory[alarm.AlarmName] = append(s.AlarmHistory[alarm.AlarmName], AlarmHistoryItem{
+		AlarmName:       alarm.AlarmName,
+		AlarmType:       alarmTypeMetricAlarm,
+		Timestamp:       time.Now().UTC(),
+		HistoryItemType: itemType,
+		HistorySummary:  summary,
+		HistoryData:     string(historyData),
+	})
 }
 
 // DescribeAlarms returns information about alarms.

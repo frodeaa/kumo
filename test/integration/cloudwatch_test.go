@@ -4,6 +4,7 @@ package integration
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -486,4 +487,55 @@ func TestCloudWatch_TagOperations(t *testing.T) {
 	}
 
 	golden.New(t, golden.WithIgnoreFields("ResultMetadata")).Assert(t.Name()+"_after_untag", listOutput2)
+}
+
+func TestCloudWatch_DescribeAlarmHistory(t *testing.T) {
+	client := newCloudWatchClient(t)
+	ctx := t.Context()
+	alarmName := "test-alarm-history"
+
+	if _, err := client.PutMetricAlarm(ctx, &cloudwatch.PutMetricAlarmInput{
+		AlarmName:          aws.String(alarmName),
+		MetricName:         aws.String("TestMetric"),
+		Namespace:          aws.String("TestNamespace"),
+		Statistic:          types.StatisticSum,
+		Period:             aws.Int32(60),
+		EvaluationPeriods:  aws.Int32(1),
+		Threshold:          aws.Float64(1),
+		ComparisonOperator: types.ComparisonOperatorGreaterThanOrEqualToThreshold,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Cleanup(func() {
+		_, _ = client.DeleteAlarms(context.Background(), &cloudwatch.DeleteAlarmsInput{AlarmNames: []string{alarmName}})
+	})
+
+	for _, state := range []types.StateValue{types.StateValueAlarm, types.StateValueOk} {
+		if _, err := client.SetAlarmState(ctx, &cloudwatch.SetAlarmStateInput{
+			AlarmName:   aws.String(alarmName),
+			StateValue:  state,
+			StateReason: aws.String("test"),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	out, err := client.DescribeAlarmHistory(ctx, &cloudwatch.DescribeAlarmHistoryInput{
+		AlarmName:       aws.String(alarmName),
+		HistoryItemType: types.HistoryItemTypeStateUpdate,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(out.AlarmHistoryItems) != 2 {
+		t.Fatalf("AlarmHistoryItems = %+v, want 2 state updates", out.AlarmHistoryItems)
+	}
+
+	newest := out.AlarmHistoryItems[0]
+	if aws.ToString(newest.HistorySummary) != "Alarm updated from ALARM to OK" || newest.Timestamp == nil ||
+		!strings.Contains(aws.ToString(newest.HistoryData), `"newState":{"stateValue":"OK"`) {
+		t.Errorf("newest item = %+v", newest)
+	}
 }

@@ -20,22 +20,24 @@ const (
 	errInternalServiceError = "InternalServiceError"
 	errInvalidAction        = "InvalidAction"
 	errResourceNotFound     = "ResourceNotFound"
+	errInvalidNextToken     = "InvalidNextToken"
 )
 
 // Action names, shared with service.go's action registration and the CBOR
 // dispatcher's switch.
 const (
-	actionPutMetricData       = "PutMetricData"
-	actionGetMetricData       = "GetMetricData"
-	actionGetMetricStatistics = "GetMetricStatistics"
-	actionListMetrics         = "ListMetrics"
-	actionPutMetricAlarm      = "PutMetricAlarm"
-	actionDeleteAlarms        = "DeleteAlarms"
-	actionDescribeAlarms      = "DescribeAlarms"
-	actionSetAlarmState       = "SetAlarmState"
-	actionListTagsForResource = "ListTagsForResource"
-	actionTagResource         = "TagResource"
-	actionUntagResource       = "UntagResource"
+	actionPutMetricData        = "PutMetricData"
+	actionGetMetricData        = "GetMetricData"
+	actionGetMetricStatistics  = "GetMetricStatistics"
+	actionListMetrics          = "ListMetrics"
+	actionPutMetricAlarm       = "PutMetricAlarm"
+	actionDeleteAlarms         = "DeleteAlarms"
+	actionDescribeAlarms       = "DescribeAlarms"
+	actionDescribeAlarmHistory = "DescribeAlarmHistory"
+	actionSetAlarmState        = "SetAlarmState"
+	actionListTagsForResource  = "ListTagsForResource"
+	actionTagResource          = "TagResource"
+	actionUntagResource        = "UntagResource"
 )
 
 // PutMetricData handles the PutMetricData action.
@@ -292,6 +294,48 @@ func (s *Service) DescribeAlarms(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// DescribeAlarmHistory handles the DescribeAlarmHistory action.
+func (s *Service) DescribeAlarmHistory(w http.ResponseWriter, r *http.Request) {
+	var req DescribeAlarmHistoryRequest
+	if !decodeCloudWatchRequest(w, r, &req) {
+		return
+	}
+
+	result, err := s.storage.DescribeAlarmHistory(r.Context(), &req)
+	if err != nil {
+		handleCloudWatchError(w, r, err)
+
+		return
+	}
+
+	if !service.IsQueryProtocol(r) {
+		items := make([]AlarmHistoryItemJSON, 0, len(result.AlarmHistoryItems))
+		for _, item := range result.AlarmHistoryItems {
+			items = append(items, AlarmHistoryItemJSON{
+				AlarmName:       item.AlarmName,
+				AlarmType:       item.AlarmType,
+				Timestamp:       jsonTimestamp{item.Timestamp},
+				HistoryItemType: item.HistoryItemType,
+				HistorySummary:  item.HistorySummary,
+				HistoryData:     item.HistoryData,
+			})
+		}
+
+		writeJSONResponse(w, DescribeAlarmHistoryResponse{AlarmHistoryItems: items, NextToken: result.NextToken})
+
+		return
+	}
+
+	writeCloudWatchXML(w, xmlDescribeAlarmHistoryResponse{
+		Xmlns: cloudWatchXMLNS,
+		DescribeAlarmHistoryResult: xmlDescribeAlarmHistoryResult{
+			AlarmHistoryItems: xmlAlarmHistoryItemList{Members: alarmHistoryItemsToXML(result.AlarmHistoryItems)},
+			NextToken:         result.NextToken,
+		},
+		ResponseMetadata: xmlResponseMetadata{RequestID: uuid.New().String()},
+	})
+}
+
 // SetAlarmState handles the SetAlarmState action.
 func (s *Service) SetAlarmState(w http.ResponseWriter, r *http.Request) {
 	var req SetAlarmStateRequest
@@ -437,6 +481,8 @@ func (s *Service) DispatchAction(w http.ResponseWriter, r *http.Request) {
 		s.DeleteAlarms(w, r)
 	case actionDescribeAlarms:
 		s.DescribeAlarms(w, r)
+	case actionDescribeAlarmHistory:
+		s.DescribeAlarmHistory(w, r)
 	case actionSetAlarmState:
 		s.SetAlarmState(w, r)
 	case actionListTagsForResource:
@@ -768,6 +814,35 @@ func (s *Service) DescribeAlarmsCBOR(w http.ResponseWriter, r *http.Request) {
 	server.WriteCBORResponse(w, DescribeAlarmsCBORResponse{
 		MetricAlarms: cborAlarms,
 		NextToken:    result.NextToken,
+	})
+}
+
+// DescribeAlarmHistoryCBOR handles the DescribeAlarmHistory action with CBOR protocol.
+func (s *Service) DescribeAlarmHistoryCBOR(w http.ResponseWriter, r *http.Request) {
+	var req DescribeAlarmHistoryCBORRequest
+	if !decodeCloudWatchCBORRequest(w, r, &req) {
+		return
+	}
+
+	result, err := s.storage.DescribeAlarmHistory(r.Context(), &DescribeAlarmHistoryRequest{
+		AlarmName:       req.AlarmName,
+		AlarmTypes:      req.AlarmTypes,
+		HistoryItemType: req.HistoryItemType,
+		StartDate:       jsonTimestamp{req.StartDate},
+		EndDate:         jsonTimestamp{req.EndDate},
+		MaxRecords:      req.MaxRecords,
+		NextToken:       req.NextToken,
+		ScanBy:          req.ScanBy,
+	})
+	if err != nil {
+		handleCloudWatchCBORError(w, err)
+
+		return
+	}
+
+	server.WriteCBORResponse(w, DescribeAlarmHistoryCBORResponse{
+		AlarmHistoryItems: result.AlarmHistoryItems,
+		NextToken:         result.NextToken,
 	})
 }
 
