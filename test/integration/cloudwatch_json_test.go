@@ -8,8 +8,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/xml"
 	"io"
 	"net/http"
+	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -143,5 +146,113 @@ func TestCloudWatch_JSONProtocol_MetricDataRoundTrip(t *testing.T) {
 	got := result.MetricDataResults[0]
 	if len(got.Timestamps) != 1 || got.Timestamps[0] != 1760608800.5 || got.Values[0] != 7 {
 		t.Errorf("result = %+v, want one datapoint at 1760608800.5 with value 7", got)
+	}
+}
+
+// postCloudWatchQuery sends a SigV4-signed AWS Query request, the wire format
+// of older SDKs and terraform-provider-aws, and returns the status and body.
+func postCloudWatchQuery(ctx context.Context, t *testing.T, action string, params url.Values) (int, []byte) {
+	t.Helper()
+
+	form := url.Values{"Action": {action}, "Version": {"2010-08-01"}}
+	for k, v := range params {
+		form[k] = v
+	}
+
+	body := form.Encode()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, testEndpoint()+"/", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("User-Agent", "aws-sdk-go-v2/1.0.0 api/cloudwatch#1.0.0")
+
+	creds, err := awsConfig(t).Credentials.Retrieve(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sum := sha256.Sum256([]byte(body))
+	if err := v4.NewSigner().SignHTTP(ctx, creds, req, hex.EncodeToString(sum[:]), "monitoring", testRegion(), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := resp.Header.Get("Content-Type"); !strings.HasPrefix(got, "text/xml") {
+		t.Fatalf("%s: Content-Type = %q, want text/xml; body=%s", action, got, respBody)
+	}
+
+	return resp.StatusCode, respBody
+}
+
+func TestCloudWatch_QueryProtocol_MetricsAndAlarmState(t *testing.T) {
+	ctx := t.Context()
+	timestamp := time.Now().UTC().Truncate(time.Minute)
+
+	status, body := postCloudWatchQuery(ctx, t, "PutMetricData", url.Values{
+		"Namespace":                      {"Kumo/QueryProtocol"},
+		"MetricData.member.1.MetricName": {"Latency"},
+		"MetricData.member.1.Timestamp":  {timestamp.Format(time.RFC3339)},
+		"MetricData.member.1.Value":      {"7"},
+	})
+	if status != http.StatusOK {
+		t.Fatalf("PutMetricData: status %d body=%s", status, body)
+	}
+
+	status, body = postCloudWatchQuery(ctx, t, "GetMetricStatistics", url.Values{
+		"Namespace":           {"Kumo/QueryProtocol"},
+		"MetricName":          {"Latency"},
+		"StartTime":           {timestamp.Add(-time.Minute).Format(time.RFC3339)},
+		"EndTime":             {timestamp.Add(time.Minute).Format(time.RFC3339)},
+		"Period":              {"60"},
+		"Statistics.member.1": {"Sum"},
+	})
+	if status != http.StatusOK {
+		t.Fatalf("GetMetricStatistics: status %d body=%s", status, body)
+	}
+
+	var stats struct {
+		Datapoints []struct {
+			Timestamp string  `xml:"Timestamp"`
+			Sum       float64 `xml:"Sum"`
+		} `xml:"GetMetricStatisticsResult>Datapoints>member"`
+	}
+
+	if err := xml.Unmarshal(body, &stats); err != nil {
+		t.Fatalf("GetMetricStatistics is not XML: %v body=%s", err, body)
+	}
+
+	if len(stats.Datapoints) != 1 || stats.Datapoints[0].Sum != 7 || stats.Datapoints[0].Timestamp != timestamp.Format(time.RFC3339) {
+		t.Errorf("datapoints = %+v, want Sum 7 at %s", stats.Datapoints, timestamp.Format(time.RFC3339))
+	}
+
+	status, body = postCloudWatchQuery(ctx, t, "SetAlarmState", url.Values{
+		"AlarmName":   {"query-protocol-missing-alarm"},
+		"StateValue":  {"ALARM"},
+		"StateReason": {"test"},
+	})
+
+	var errResp struct {
+		Code string `xml:"Error>Code"`
+	}
+
+	if err := xml.Unmarshal(body, &errResp); err != nil {
+		t.Fatalf("SetAlarmState error is not XML: %v body=%s", err, body)
+	}
+
+	if status != http.StatusNotFound || errResp.Code != "ResourceNotFound" {
+		t.Errorf("SetAlarmState on a missing alarm: status %d code %q, want 404 ResourceNotFound", status, errResp.Code)
 	}
 }

@@ -425,7 +425,7 @@ func (s *MemoryStorage) PutMetricAlarm(_ context.Context, req *PutMetricAlarmReq
 	defer s.mu.Unlock()
 
 	now := time.Now().UTC()
-	alarmARN := fmt.Sprintf("arn:aws:cloudwatch:us-east-1:%s:alarm:%s", defaultAccountID, req.AlarmName)
+	alarmARN := fmt.Sprintf("arn:aws:cloudwatch:%s:%s:alarm:%s", s.region, defaultAccountID, req.AlarmName)
 
 	actionsEnabled := true
 	if req.ActionsEnabled != nil {
